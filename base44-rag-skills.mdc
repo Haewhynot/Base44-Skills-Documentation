@@ -1,0 +1,431 @@
+---
+description: RAG trên skills_data (Supabase + LangChain + OpenAI) và kiến thức Base44. Dùng khi nhắc RAG, vector, skills_data, Base44 SDK/CLI.
+alwaysApply: false
+---
+
+# Base44 RAG Skills
+
+Tài liệu tham chiếu chuẩn cho AI Assistant (Claude Code, Cursor, extension Claude Code trên VS Code, Codex, Qoder) về hai việc:
+
+1. **Kiến thức**: Base44 xử lý "học dữ liệu" và "học kỹ năng" như thế nào (mục 3).
+2. **Quy trình thực nghiệm**: hệ thống RAG đã được dựng, chạy và sửa lỗi ra sao, để agent lặp lại đúng, không phải đoán (mục 4 trở đi).
+
+> Nguyên tắc chung: chỉ trả lời dựa trên nội dung trong skill này và trong `skills_data/`. Không bịa hàm, tham số hay tính năng của Base44. Thiếu thông tin thì nói rõ là tài liệu chưa có.
+
+---
+
+## 1. Khi nào đọc skill này
+
+Dùng khi tác vụ thuộc một trong các nhóm sau:
+
+| Nhóm | Ví dụ yêu cầu của người dùng |
+|---|---|
+| Dựng RAG | "nạp skill lên Supabase", "tạo chat hỏi đáp trên file skill" |
+| Vận hành RAG | "thêm tài liệu mới", "nạp lại vector", "chạy lại chat" |
+| Sửa lỗi môi trường | `python` không nhận lệnh, `venv\Scripts\activate` bị chặn |
+| Sửa lỗi LangChain / API | `langchain.chains` không tìm thấy, Anthropic 400 / 404 |
+| Kiến thức Base44 | "Base44 có học skill từ file upload không?", cách dùng base44-sdk / base44-cli với IDE |
+
+---
+
+## 2. Cấu trúc thư mục (con trỏ thư mục skills)
+
+```
+D:\claude-skills-rag\                  <- gốc dự án (Windows)
+├── venv\                              <- môi trường ảo Python 3.12 (không commit)
+├── skills_data\                       <- THƯ MỤC DỮ LIỆU MÀ RAG TRỎ TỚI
+│   ├── <tên-có-nghĩa-1>.md            <- vd: base44-sdk.md
+│   ├── <tên-có-nghĩa-2>.md            <- vd: base44-cli.md
+│   └── <tên-có-nghĩa-3>.md            <- vd: base44-skills-documentation.md
+├── 1_push_data.py                     <- đọc skills_data -> chia đoạn -> embedding -> đẩy Supabase
+├── 2_chat.py                          <- vòng lặp chat RAG trên terminal
+├── .env                               <- khóa bí mật (KHÔNG commit)
+├── .gitignore                         <- phải có: venv/, .env
+└── SKILL.md (hoặc bản trong .claude/skills/...)  <- file này
+```
+
+Quy ước bắt buộc:
+
+- `skills_data/` là **nguồn sự thật duy nhất**. Muốn AI biết thêm gì thì thêm file `.md` vào đây rồi nạp lại (mục 4, Giai đoạn 5).
+- File phải có đuôi `.md` thật. Trong dự án gốc, 3 file tải về bị trùng tên (`SKILL`, `SKILL (2)`, `SKILL (3)`), Windows ẩn đuôi và chúng nằm trong `.zip`. Phải giải nén và **đặt tên có nghĩa, khác nhau**.
+- Tên bảng Supabase: `documents`. Hàm tìm kiếm: `match_documents`. Hai tên này phải khớp giữa Supabase và hai script.
+
+Biến môi trường trong `.env`:
+
+```
+SUPABASE_URL=...
+SUPABASE_SERVICE_KEY=...
+OPENAI_API_KEY=...
+```
+
+`SUPABASE_SERVICE_KEY` có quyền toàn bộ database. Không bao giờ in ra log, không commit, không dán vào chat.
+
+---
+
+## 3. Kiến thức nền: Base44 xử lý dữ liệu và kỹ năng
+
+Base44 tách rõ hai việc: **học Kiến thức (Knowledge)** và **học Kỹ năng thao tác (Skills)**.
+
+### 3.1. Knowledge Base (học kiến thức)
+
+- Khả năng: **CÓ** học trực tiếp từ file upload.
+- Định dạng: tài liệu văn bản (PDF, Word, TXT, ...).
+- Cách hoạt động: upload tài liệu vào Knowledge Base của AI Chatbot tích hợp trong app Base44. AI đọc, quét và học để tự trả lời câu hỏi của người dùng cuối.
+
+### 3.2. Super Agent Skills (học kỹ năng hành động)
+
+- Khả năng: **chủ yếu qua prompt (văn bản mô tả)**. **Chưa hỗ trợ** upload trực tiếp file cấu trúc logic (JSON, MD chứa logic) để agent tự chuyển thành kỹ năng chạy được.
+- "Super Agents" chạy ngầm 24/7 để tự động hóa workflow phức tạp. Muốn dạy skill mới hoặc đặt quy tắc vận hành, phải mô tả công việc bằng văn bản.
+
+### 3.3. Ứng dụng thực tế của file Agent Skills
+
+Trong cộng đồng developer Base44, "upload skills" là để **nâng cao trải nghiệm lập trình (DX)**, không phải nạp vào nền tảng Base44.
+
+- Bản chất: file như `SKILL.md` là bộ tài liệu đã tối ưu chứa ngữ cảnh `base44-sdk` hoặc `base44-cli`.
+- Cách triển khai: nạp vào không gian làm việc của AI IDE/Assistant, không upload lên Base44.
+  - Cursor: Project Knowledge hoặc file `.cursorrules` (hoặc `.cursor/rules/*.mdc` ở phiên bản mới).
+  - Claude / Qoder: Project Knowledge / cửa sổ ngữ cảnh.
+- Lợi ích:
+  1. Dạy AI nắm đúng cấu trúc framework Base44.
+  2. Sinh code đúng chuẩn Base44 SDK/CLI.
+  3. Chống hallucination: giảm việc AI bịa hàm không tồn tại.
+  4. Hỗ trợ tích hợp API: Supabase, GitHub, Drive API, Google Calendar API.
+
+Đoạn 3.1 và 3.2 chính là nội dung cần nằm trong `skills_data/` để RAG trả lời được câu hỏi "Base44 có tính năng học skills từ file upload không?" (xem Giai đoạn 5).
+
+---
+
+## 4. Quy trình xây dựng RAG (theo thứ tự)
+
+### Giai đoạn 0: Môi trường Python và venv (Windows)
+
+Yêu cầu: Python 3.12.
+
+```powershell
+python --version                 # phải in ra Python 3.12.x
+python -m venv venv
+venv\Scripts\activate            # thành công khi đầu dòng có (venv)
+pip install python-dotenv supabase langchain langchain-classic langchain-community langchain-openai langchain-text-splitters
+```
+
+Danh sách gói ở trên suy ra từ các `import` trong hai script. Nếu có `requirements.txt` của dự án thì ưu tiên file đó. Sau khi chạy ổn, nên `pip freeze > requirements.txt`.
+
+Hai lỗi thường gặp ở bước này nằm ở mục 5 (lỗi E1, E2).
+
+### Giai đoạn 1: Chuẩn bị dữ liệu và nạp vector (`1_push_data.py`)
+
+1. Giải nén các file nguồn, đổi tên có nghĩa, đặt vào `skills_data/` (đuôi `.md`).
+2. Đảm bảo Supabase đã có bảng `documents` và hàm `match_documents` (xem 4.1).
+3. Chạy `python 1_push_data.py`.
+
+Kết quả mong đợi (log thực tế của dự án, 3 file -> 28 đoạn):
+
+```
+(venv) PS D:\claude-skills-rag> python 1_push_data.py
+⏳ Đang quét và đọc toàn bộ các file trong thư mục skills_data...
+✅ Đã tìm thấy 3 file và phân thành 28 đoạn Vector.
+⏳ Đang chuyển sang Vector và đẩy lên Supabase...
+🎉 XUẤT SẮC! Đã nạp thành công toàn bộ các file Skill lên Supabase!
+```
+
+Thông số đã dùng: `chunk_size=1000`, `chunk_overlap=100`, embedding `text-embedding-3-small`.
+
+Mã nguồn `1_push_data.py`:
+
+```python
+import os
+from dotenv import load_dotenv
+from supabase.client import create_client, Client
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import SupabaseVectorStore
+
+load_dotenv()
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
+
+if not supabase_url or not supabase_key:
+    raise ValueError("❌ Thiếu SUPABASE_URL hoặc SUPABASE_SERVICE_KEY trong file .env!")
+
+supabase: Client = create_client(supabase_url, supabase_key)
+
+folder_path = "skills_data"
+print("⏳ Đang quét và đọc toàn bộ các file trong thư mục skills_data...")
+
+loader = DirectoryLoader(
+    folder_path,
+    glob="**/*",
+    loader_cls=TextLoader,
+    loader_kwargs={"encoding": "utf-8"},
+)
+raw_docs = loader.load()
+
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+docs = text_splitter.split_documents(raw_docs)
+
+print(f"✅ Đã tìm thấy {len(raw_docs)} file và phân thành {len(docs)} đoạn Vector.")
+
+print("⏳ Đang chuyển sang Vector và đẩy lên Supabase...")
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+vector_store = SupabaseVectorStore.from_documents(
+    docs,
+    embeddings,
+    client=supabase,
+    table_name="documents",
+    query_name="match_documents",
+)
+
+print("🎉 XUẤT SẮC! Đã nạp thành công toàn bộ các file Skill lên Supabase!")
+```
+
+Lưu ý khi sửa script:
+
+- `glob="**/*"` đọc mọi file trong `skills_data/`. Nếu lẫn file nhị phân (zip, pdf, ảnh) thì `TextLoader` sẽ lỗi. Chỉ để file văn bản UTF-8. Có thể đổi thành `glob="**/*.md"` cho chắc.
+- `from_documents` **thêm mới** vào bảng, không xóa dữ liệu cũ. Chạy lại nhiều lần sẽ tạo **vector trùng lặp** (xem lỗi E9).
+
+#### 4.1. Chuẩn bị Supabase (điều kiện tiên quyết)
+
+Báo cáo gốc không ghi lại bước này vì bảng đã được tạo từ trước. Đây là mẫu chuẩn của LangChain cho `text-embedding-3-small` (1536 chiều). Chạy trong SQL Editor của Supabase nếu bảng/hàm chưa tồn tại:
+
+```sql
+create extension if not exists vector;
+
+create table if not exists documents (
+  id bigserial primary key,
+  content text,
+  metadata jsonb,
+  embedding vector(1536)
+);
+
+create or replace function match_documents (
+  query_embedding vector(1536),
+  match_count int default null,
+  filter jsonb default '{}'
+) returns table (
+  id bigint,
+  content text,
+  metadata jsonb,
+  similarity float
+)
+language plpgsql
+as $$
+begin
+  return query
+  select
+    documents.id,
+    documents.content,
+    documents.metadata,
+    1 - (documents.embedding <=> query_embedding) as similarity
+  from documents
+  where documents.metadata @> filter
+  order by documents.embedding <=> query_embedding
+  limit match_count;
+end;
+$$;
+```
+
+Nếu đổi model embedding sang model khác chiều (vd 3072), phải sửa `vector(1536)` và nạp lại toàn bộ.
+
+### Giai đoạn 2: Tạo `2_chat.py`
+
+- Lỗi `[Errno 2] No such file or directory` nghĩa là file chưa tồn tại. Tạo file thật rồi mới dán code:
+
+```powershell
+New-Item -ItemType File -Name 2_chat.py
+```
+
+- Nếu `import langchain.chains` lỗi, xem lỗi E4.
+
+### Giai đoạn 3: Thử Claude (Anthropic) và lý do chuyển sang OpenAI
+
+Dự án đã thử `langchain-anthropic` và gặp hai lỗi (E5, E6 ở mục 5). **Quyết định cuối cùng: dùng OpenAI `gpt-4o-mini`** vì khóa OpenAI đã cấu hình và nạp tiền, giúp tối ưu chi phí. Đây là cấu hình đang chạy ổn, không đổi trừ khi người dùng yêu cầu.
+
+### Giai đoạn 4: Mã nguồn hoàn chỉnh và nghiệm thu (`2_chat.py`)
+
+```python
+import os
+from dotenv import load_dotenv
+from supabase.client import create_client, Client
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import SupabaseVectorStore
+from langchain_core.prompts import ChatPromptTemplate
+
+try:
+    from langchain.chains import create_retrieval_chain
+    from langchain.chains.combine_documents import create_stuff_documents_chain
+except ModuleNotFoundError:
+    from langchain_classic.chains import create_retrieval_chain
+    from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+
+load_dotenv()
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
+
+supabase: Client = create_client(supabase_url, supabase_key)
+
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+vector_store = SupabaseVectorStore(
+    client=supabase,
+    embedding=embeddings,
+    table_name="documents",
+    query_name="match_documents",
+)
+
+retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+
+system_prompt = (
+    "Bạn là một trợ lý AI chuyên gia. "
+    "Dựa vào thông tin ngữ cảnh được cung cấp dưới đây để trả lời câu hỏi của người dùng một cách chính xác và ngắn gọn. "
+    "Nếu thông tin không có trong ngữ cảnh, hãy thông báo rằng tài liệu hiện chưa cập nhật phần này.\n\n"
+    "Ngữ cảnh tài liệu:\n{context}"
+)
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", system_prompt),
+    ("human", "{input}"),
+])
+
+question_answer_chain = create_stuff_documents_chain(llm, prompt)
+rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+
+print("=" * 60)
+print("🤖 HỆ THỐNG RAG ĐÃ SẴN SÀNG (Đang dùng OpenAI gpt-4o-mini)")
+print("Gõ câu hỏi của bạn và nhấn Enter. Gõ 'exit' hoặc 'thoát' để dừng.")
+print("=" * 60 + "\n")
+
+while True:
+    try:
+        user_input = input("👤 Bạn: ")
+        if user_input.lower().strip() in ["exit", "quit", "thoat", "thoát"]:
+            break
+        if not user_input.strip():
+            continue
+
+        print("⏳ AI đang truy xuất thông tin từ Supabase...")
+        response = rag_chain.invoke({"input": user_input})
+
+        print(f"\n💡 Phản hồi:\n{response['answer']}\n")
+        print("-" * 60)
+    except KeyboardInterrupt:
+        break
+```
+
+Các tham số quan trọng: `k=3` (số đoạn truy xuất), `temperature=0.3`, khối `try/except` import để tương thích cả hai kiến trúc LangChain, system prompt bắt buộc trả lời "tài liệu hiện chưa cập nhật phần này" khi thiếu thông tin.
+
+Nghiệm thu lần 1 (chưa có dữ liệu Base44 trong `skills_data/`):
+
+```
+👤 Bạn: Base44 có tính năng học skills từ file upload không?
+⏳ AI đang truy xuất thông tin từ Supabase...
+
+💡 Phản hồi:
+Tài liệu hiện chưa cập nhật phần này.
+```
+
+Đây là **kết quả đúng**: hệ thống không có lỗi API, và system prompt giúp AI không bịa khi thiếu dữ liệu.
+
+### Giai đoạn 5: Bản chất RAG và cập nhật dữ liệu
+
+RAG chỉ thông minh bằng lượng dữ liệu đã nạp. Trả lời "chưa cập nhật" là do thiếu dữ liệu, không phải do lỗi code.
+
+Quy trình cập nhật chuẩn:
+
+1. Thêm hoặc sửa file `.md` trong `skills_data/` (ví dụ chép mục 3.1, 3.2, 3.3 của skill này vào một file).
+2. **Xóa vector cũ** để tránh trùng (xem E9), rồi nạp lại: `python 1_push_data.py`.
+3. Chạy `python 2_chat.py`, hỏi lại: "Base44 có tính năng học skills từ file upload không?"
+4. Câu trả lời đúng phải nêu được: Knowledge Base **có** học từ file upload (PDF, Word, TXT); Super Agent Skills **chủ yếu qua prompt**, chưa upload file logic trực tiếp.
+
+---
+
+## 5. Bảng lỗi đã gặp và cách khắc phục
+
+| Mã | Triệu chứng | Nguyên nhân | Khắc phục |
+|---|---|---|---|
+| E1 | `python --version` báo command not found | Cài Python quên tích "Add Python to PATH" | Chạy lại file cài đặt, chọn **Modify**, tích **Add Python.exe to PATH**, khởi động lại Cursor/VS Code |
+| E2 | `venv\Scripts\activate`: *running scripts is disabled on this system* | Execution Policy của PowerShell chặn script | Mở PowerShell **Run as Administrator**, chạy `Set-ExecutionPolicy Unrestricted -Force` (cách dự án đã dùng). Cách an toàn hơn, không cần admin: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Thành công khi thấy `(venv)` |
+| E3 | `[Errno 2] No such file or directory` khi chạy `2_chat.py` | File chưa được tạo | `New-Item -ItemType File -Name 2_chat.py`, sau đó dán code |
+| E4 | `ModuleNotFoundError: langchain.chains` | Kiến trúc LangChain mới tách `chains` sang gói khác | `pip install langchain langchain-classic` và dùng khối `try/except` import (có sẵn trong 2_chat.py) |
+| E5 | Anthropic `Error code: 400` — `temperature: Extra inputs are not permitted` | `langchain-anthropic` truyền tham số không còn được API chấp nhận | Xóa `temperature=...` khỏi constructor `ChatAnthropic` |
+| E6 | Anthropic `Error code: 404` — `not_found_error` với `model: claude-3-5-sonnet-20240620` và các tên khác | Kết luận của dự án: `ANTHROPIC_API_KEY` trong `.env` không phải khóa chính hãng của Anthropic. Cũng cần kiểm tra tên model còn được hỗ trợ không | Dự án chuyển sang OpenAI `gpt-4o-mini`. Nếu muốn quay lại Claude: dùng khóa lấy từ console.anthropic.com và tên model hiện hành trong tài liệu Anthropic |
+| E7 | File nguồn trùng tên, mất đuôi `.md`, kẹt trong `.zip` | Tải về nhiều file cùng tên; Windows ẩn đuôi | Giải nén, bật hiển thị đuôi file, đặt tên có nghĩa, chuyển vào `skills_data/` |
+| E8 | AI trả lời "Tài liệu hiện chưa cập nhật phần này" | Chưa có dữ liệu liên quan trong vector DB | Không phải lỗi. Bổ sung nội dung vào `skills_data/` rồi nạp lại |
+| E9 | Kết quả truy xuất lặp, trùng đoạn sau khi nạp lại | `from_documents` thêm mới, không xóa bản cũ | Trong Supabase SQL Editor chạy `truncate table documents;` trước khi chạy lại `1_push_data.py` (chỉ khi người dùng đồng ý xóa toàn bộ dữ liệu cũ) |
+
+---
+
+## 6. Quy tắc cho AI Assistant khi làm việc với dự án này
+
+Làm:
+
+- Đọc `skills_data/` và skill này trước khi trả lời câu hỏi về Base44.
+- Giữ nguyên tên bảng `documents`, hàm `match_documents`, model embedding `text-embedding-3-small` trừ khi người dùng yêu cầu đổi (và nhắc phải nạp lại toàn bộ vector).
+- Khi thêm tài liệu: nhắc người dùng chạy lại `1_push_data.py`, và cảnh báo vector trùng.
+- Khi gặp lỗi, đối chiếu bảng mục 5 trước khi thử hướng khác.
+- Giữ giọng điệu và ngôn ngữ của người dùng (tiếng Việt là mặc định trong dự án này).
+
+Không làm:
+
+- Không bịa tính năng, hàm hoặc tham số của Base44 SDK/CLI. Thiếu thông tin thì nói "tài liệu hiện chưa cập nhật phần này".
+- Không đưa `SUPABASE_SERVICE_KEY`, `OPENAI_API_KEY` vào code, log hoặc commit.
+- Không chạy `truncate table documents` hay xóa dữ liệu khi chưa được người dùng đồng ý rõ ràng.
+- Không thêm lại `temperature` vào `ChatAnthropic` (gây lỗi E5).
+- Không nói rằng Base44 cho upload file skill để agent tự thành kỹ năng. Hiện chưa hỗ trợ.
+
+---
+
+## 7. Cách từng công cụ nhận diện skill này
+
+Cùng một nội dung, đặt ở vị trí mà mỗi công cụ tự quét. Gốc dự án là `D:\claude-skills-rag\`.
+
+| Công cụ | Vị trí đặt | Ghi chú |
+|---|---|---|
+| Claude Code (terminal) và extension Claude Code trên VS Code | `.claude\skills\base44-rag-skills\SKILL.md` (trong dự án) hoặc `%USERPROFILE%\.claude\skills\base44-rag-skills\SKILL.md` (dùng chung mọi dự án) | Đọc phần `name` + `description` ở frontmatter để quyết định khi nào nạp skill. Tên thư mục nên trùng `name` |
+| Cursor | `.cursor\rules\base44-rag-skills.mdc` | Dùng frontmatter của Cursor (`description`, `alwaysApply: false`) rồi dán nội dung bên dưới frontmatter. Bản cũ dùng `.cursorrules` ở gốc dự án |
+| Codex | `AGENTS.md` ở gốc dự án | Ghi tóm tắt + dòng: "Với RAG/Base44/skills_data, đọc `.claude/skills/base44-rag-skills/SKILL.md`". Nếu phiên bản Codex bạn dùng hỗ trợ thư mục skills riêng, hãy kiểm tra tài liệu của Codex để biết vị trí |
+| Claude.ai / Qoder | Upload vào Project Knowledge | Theo mục 3.3 |
+
+Lệnh PowerShell tạo các bản từ một file gốc (chạy ở gốc dự án, giả sử file nguồn là `SKILL.md`):
+
+```powershell
+New-Item -ItemType Directory -Force .claude\skills\base44-rag-skills | Out-Null
+Copy-Item SKILL.md .claude\skills\base44-rag-skills\SKILL.md
+
+New-Item -ItemType Directory -Force .cursor\rules | Out-Null
+Copy-Item SKILL.md .cursor\rules\base44-rag-skills.mdc
+```
+
+Với bản `.mdc`, mở file và sửa frontmatter thành:
+
+```
+---
+description: RAG trên skills_data (Supabase + LangChain + OpenAI) và kiến thức Base44. Dùng khi nhắc RAG, vector, skills_data, Base44 SDK/CLI.
+alwaysApply: false
+---
+```
+
+Mẫu `AGENTS.md` tối thiểu cho Codex:
+
+```markdown
+# Hướng dẫn cho agent
+
+- Dự án RAG trên thư mục `skills_data/` (Python 3.12, venv, LangChain, Supabase, OpenAI).
+- Khi làm việc liên quan RAG, nạp vector, Base44, lỗi môi trường/LangChain/API: đọc `.claude/skills/base44-rag-skills/SKILL.md` trước.
+- Không bao giờ ghi khóa bí mật vào code hay commit. Không xóa dữ liệu Supabase khi chưa được cho phép.
+```
+
+---
+
+## 8. Checklist nghiệm thu
+
+- [ ] `python --version` ra 3.12.x và có `(venv)` ở đầu dòng terminal
+- [ ] `.env` có đủ 3 biến; `.gitignore` chứa `venv/` và `.env`
+- [ ] `skills_data/` chỉ chứa file `.md` UTF-8, tên khác nhau và có nghĩa
+- [ ] Supabase có bảng `documents` và hàm `match_documents` (vector 1536 chiều)
+- [ ] `python 1_push_data.py` in ra số file và số đoạn Vector, không lỗi
+- [ ] `python 2_chat.py` khởi động, hỏi được câu về Base44 và trả lời đúng theo mục 3
+- [ ] Hỏi một câu ngoài tài liệu thì nhận "Tài liệu hiện chưa cập nhật phần này"
+- [ ] Skill đã được đặt đúng vị trí cho công cụ bạn dùng (mục 7)
