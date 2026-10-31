@@ -1,0 +1,16 @@
+# Môi trường ảo Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Khóa bí mật: KHÔNG BAO GIỜ commit
+.env
+.env.*
+!.env.example
+
+# File hệ thống / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
